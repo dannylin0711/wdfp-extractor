@@ -1419,6 +1419,10 @@ class WfExtractor {
       );
       pushExist(
         possibleGeneralAmfAssets,
+        await this.digestAndCheckFilePath(`${filePath}.movie.amf3.deflate`)
+      );
+      pushExist(
+        possibleGeneralAmfAssets,
         await this.digestAndCheckFilePath(
           `${filePath.replace(/\/[A-z0-9_]*$/, '/sprite_sheet')}.atf.deflate`
         )
@@ -1463,11 +1467,15 @@ class WfExtractor {
       const atfEntry = await this.digestAndCheckFilePath(
         imagePath.replace(fileName, `${fileNameRoot}.atf.deflate`)
       );
+      const movieEntry = await this.digestAndCheckFilePath(
+        imagePath.replace(fileName, `${fileNameRoot}.movie.amf3.deflate`)
+      );
 
       pushExist(possibleImageAmfAssets, partsEntry);
       pushExist(possibleImageAmfAssets, frameEntry);
       pushExist(possibleImageAmfAssets, pixelartFrameEntry);
       pushExist(possibleImageAmfAssets, atfEntry);
+      pushExist(possibleImageAmfAssets, movieEntry);
 
       if (atlasEntry) {
         sprites[parentPath] = 'sprite';
@@ -2992,6 +3000,7 @@ class WfExtractor {
           '.timeline.amf3',
           '.frame.amf3',
           '.parts.amf3',
+          '.movie.amf3',
           '.atf',
           '.action.dsl',
           '.action.dsl.amf3',
