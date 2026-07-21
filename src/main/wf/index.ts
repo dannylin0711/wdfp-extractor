@@ -1310,7 +1310,7 @@ class WfExtractor {
       );
 
       this.asFilePaths = [
-        new Set([
+        ...new Set([
           ...(asFilePaths || []),
           ...(await this.loadDefaultAsFilePaths()),
         ]),
