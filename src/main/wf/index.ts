@@ -45,10 +45,13 @@ import {
   COMMON_FILE_FORMAT,
   DATEFORMAT_A,
   ENEMY_DSL_FORMAT_DEFLATE,
+  FIELD_DATA_MASTER_PATH,
+  GENERAL_AMF_FORMAT_DEFLATE,
   IS_DEVELOPMENT,
   MERGEABLE_PATH_PREFIXES,
   NOX_PORT_LIST,
   POSSIBLE_PATH_REGEX,
+  TERRAIN_PATH_PREFIX,
 } from './constants';
 
 const RESOURCES_PATH = app.isPackaged
@@ -1349,8 +1352,62 @@ class WfExtractor {
     return splittedPath.join('/');
   };
 
+  terrainFilePathsLoaded = false;
+
+  /**
+   * Terrain files (`battle/terrain/**`) are the Tiled maps carrying each
+   * field's collision geometry, yakumono and spawn points. Their paths live in
+   * the `battle/field_data` master table rather than in the SWF string pool,
+   * so `filePaths.lock` only happens to carry the subset referenced elsewhere.
+   * Merge the master table's own list in so every field gets probed.
+   */
+  loadTerrainFilePaths = async () => {
+    if (this.terrainFilePathsLoaded) return;
+    this.terrainFilePathsLoaded = true;
+
+    let fieldData;
+
+    try {
+      fieldData = JSON.parse(
+        (
+          await readFile(
+            `${this.ROOT_PATH}/output/orderedmap/${FIELD_DATA_MASTER_PATH}`
+          )
+        ).toString()
+      );
+    } catch (err) {
+      logger.log(
+        `Skipping terrain path collection: ${FIELD_DATA_MASTER_PATH} not found. Run master table extraction first.`
+      );
+      return;
+    }
+
+    const terrainPaths: Set<string> = new Set();
+
+    const collect = (node: any) => {
+      if (typeof node === 'string') {
+        if (node.startsWith(TERRAIN_PATH_PREFIX)) terrainPaths.add(node);
+        return;
+      }
+      if (node && typeof node === 'object') Object.values(node).forEach(collect);
+    };
+
+    collect(fieldData);
+
+    const known = new Set(this.filePaths || []);
+    const added = [...terrainPaths].filter((each) => !known.has(each));
+
+    this.filePaths = [...known, ...added];
+
+    logger.log(
+      `Collected ${terrainPaths.size} terrain paths from field_data (${added.length} not in filePaths.lock).`
+    );
+  };
+
   loadPossibleAssets = async (paths) => {
     if (this.possibleAssetCache && !paths) return this.possibleAssetCache;
+
+    if (!paths) await this.loadTerrainFilePaths();
 
     const possibleImageAssets = [];
     const possibleAudioAssets = [];
@@ -1390,6 +1447,12 @@ class WfExtractor {
         possibleEsdlAssets,
         await this.digestAndCheckFilePath(
           `${filePath}${ENEMY_DSL_FORMAT_DEFLATE}`
+        )
+      );
+      pushExist(
+        possibleGeneralAmfAssets,
+        await this.digestAndCheckFilePath(
+          `${filePath}${GENERAL_AMF_FORMAT_DEFLATE}`
         )
       );
       const normalPath = this.generateNormalPath(filePath);
@@ -2964,6 +3027,21 @@ class WfExtractor {
         }
 
         return null;
+      }
+      case /^terrain/.test(debug): {
+        await this.loadTerrainFilePaths();
+
+        const terrainPaths = (this.filePaths || []).filter((each) =>
+          each.startsWith(TERRAIN_PATH_PREFIX)
+        );
+
+        logger.log(`Probing ${terrainPaths.length} terrain paths...`);
+
+        const possibleAssets = await this.loadPossibleAssets(terrainPaths);
+
+        await this.extractPossibleGeneralAmf3Assets(possibleAssets);
+
+        return true;
       }
       case /^enemyDsl .*/.test(debug): {
         const destPath = debug.split(' ').pop();

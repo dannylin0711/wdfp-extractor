@@ -60,6 +60,10 @@ export const ANIMATION_COMMON_POSTFIXES = [
 
 export const ACTION_DSL_FORMAT_DEFLATE = '.action.dsl.amf3.deflate';
 export const ENEMY_DSL_FORMAT_DEFLATE = '.esdl.amf3.deflate';
+export const GENERAL_AMF_FORMAT_DEFLATE = '.amf3.deflate';
+
+export const FIELD_DATA_MASTER_PATH = 'battle/field_data.json';
+export const TERRAIN_PATH_PREFIX = 'battle/terrain/';
 
 export const CHARACTER_SPRITE_PRESETS = [
   (character, index) => `character/${character}/pixelart/sprite_sheet`,
