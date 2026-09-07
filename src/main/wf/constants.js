@@ -65,6 +65,18 @@ export const GENERAL_AMF_FORMAT_DEFLATE = '.amf3.deflate';
 export const FIELD_DATA_MASTER_PATH = 'battle/field_data.json';
 export const TERRAIN_PATH_PREFIX = 'battle/terrain/';
 
+// FileReader.readDataFile(path, kind): `<path><kind>.amf3.deflate` JSON data
+// files — UI layouts (`.ui`, every `addUi(...)` path incl. the
+// `*_iosbundled` ones), gacha physics configs (`.gacha`), battle replay and
+// ball logs.
+export const DATA_FILE_KINDS = ['.ui', '.gacha', '.battle', '.ball'];
+
+// GachaMovieIdTools.getGachaConfigAssetPath: "gacha/" + movie_id, with the
+// ids in GachaValues columns 17 (movie_id) and 18 (guarantee_movie_id).
+export const GACHA_MASTER_PATH = 'gacha/gacha.json';
+export const GACHA_MOVIE_ID_COLUMNS = [17, 18];
+export const GACHA_CONFIG_PATH_PREFIX = 'gacha/';
+
 export const CHARACTER_SPRITE_PRESETS = [
   (character, index) => `character/${character}/pixelart/sprite_sheet`,
   (character, index) => `character/${character}/pixelart/special_sprite_sheet`,

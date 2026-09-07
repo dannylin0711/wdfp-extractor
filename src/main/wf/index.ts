@@ -46,6 +46,10 @@ import {
   DATEFORMAT_A,
   ENEMY_DSL_FORMAT_DEFLATE,
   FIELD_DATA_MASTER_PATH,
+  DATA_FILE_KINDS,
+  GACHA_MASTER_PATH,
+  GACHA_MOVIE_ID_COLUMNS,
+  GACHA_CONFIG_PATH_PREFIX,
   GENERAL_AMF_FORMAT_DEFLATE,
   IS_DEVELOPMENT,
   MERGEABLE_PATH_PREFIXES,
@@ -505,6 +509,8 @@ class WfExtractor {
       await this.adbPull(this.adbWfPath, `${this.ROOT_PATH}/dump`);
     }
 
+    if (await this.dumpBundleAssets()) isChanged = true;
+
     logger.log('Asset dump successful.');
 
     const deviceDateTime = await this.adbShell.exec('date "+%Y-%m-%d %H:%M"');
@@ -513,6 +519,47 @@ class WfExtractor {
       lastExtractionDate: deviceDateTime,
       ...(isChanged && { lockedHashMap: false }),
     });
+  };
+
+  /**
+   * Assets shipped inside the app (the `*_iosbundled` UI layouts, the
+   * title's key_visual movie, ...) are copied by the game into
+   * `<applicationStorageDirectory>/asset/bundle/{bundle,medium_bundle,small_bundle}`
+   * (FileReader.getBundleRootDirectory), a sibling tree of the downloaded
+   * `download/upload` dirs — so the plain dump never sees them. Pull them
+   * into `dump/<name>`; mergeAssets already folds those into dump/upload.
+   */
+  dumpBundleAssets = async () => {
+    let bundleDirs: string[] = [];
+
+    try {
+      bundleDirs = (
+        await this.adbShell.exec(
+          'find /data/data -type d -path "*/asset/bundle/*" -name "*bundle"'
+        )
+      )
+        .split(/[\r]{0,}\n/)
+        .map((line) => line.trim())
+        .filter((line) => /\/asset\/bundle\/[a-z_]*bundle$/.test(line));
+    } catch (err) {
+      console.log(err);
+    }
+
+    if (!bundleDirs.length) {
+      logger.log('No bundled asset directory found on the device; skipping.');
+      return false;
+    }
+
+    for (const bundleDir of bundleDirs) {
+      const name = bundleDir.split('/').pop();
+      const target = `${this.ROOT_PATH}/dump/${name}`;
+      logger.log(`Pulling bundled assets ${bundleDir} -> ${target}`);
+      await new Promise((resolve) => rimraf(target, resolve));
+      await createAndCacheDirectory(`${this.ROOT_PATH}/dump`);
+      await this.adbPull(bundleDir, target);
+    }
+
+    return true;
   };
 
   buildDigestFileMap = async () => {
@@ -1404,10 +1451,67 @@ class WfExtractor {
     );
   };
 
+  gachaConfigPathsLoaded = false;
+
+  /**
+   * The ball-drop physics configs (`gacha/<movie_id>.gacha.amf3.deflate`,
+   * read by LogicAssetContainer.getGachaConfig) are named by the `movie_id`
+   * and `guarantee_movie_id` columns of the gacha master table, never by a
+   * string literal in the scripts — so the SWF string pool cannot know them.
+   */
+  loadGachaConfigPaths = async () => {
+    if (this.gachaConfigPathsLoaded) return;
+    this.gachaConfigPathsLoaded = true;
+
+    let gachaData;
+
+    try {
+      gachaData = JSON.parse(
+        (
+          await readFile(
+            `${this.ROOT_PATH}/output/orderedmap/${GACHA_MASTER_PATH}`
+          )
+        ).toString()
+      );
+    } catch (err) {
+      logger.log(
+        `Skipping gacha config path collection: ${GACHA_MASTER_PATH} not found. Run master table extraction first.`
+      );
+      return;
+    }
+
+    const movieIds: Set<string> = new Set();
+
+    for (const rows of Object.values(gachaData) as any[]) {
+      for (const row of Array.isArray(rows) ? rows : []) {
+        for (const column of GACHA_MOVIE_ID_COLUMNS) {
+          const value = row?.[column];
+          if (typeof value === 'string' && /^[a-z0-9_]+$/i.test(value)) {
+            movieIds.add(value);
+          }
+        }
+      }
+    }
+
+    const known = new Set(this.filePaths || []);
+    const added = [...movieIds]
+      .map((id) => `${GACHA_CONFIG_PATH_PREFIX}${id}`)
+      .filter((each) => !known.has(each));
+
+    this.filePaths = [...known, ...added];
+
+    logger.log(
+      `Collected ${movieIds.size} gacha config paths from ${GACHA_MASTER_PATH} (${added.length} not in filePaths.lock).`
+    );
+  };
+
   loadPossibleAssets = async (paths) => {
     if (this.possibleAssetCache && !paths) return this.possibleAssetCache;
 
-    if (!paths) await this.loadTerrainFilePaths();
+    if (!paths) {
+      await this.loadTerrainFilePaths();
+      await this.loadGachaConfigPaths();
+    }
 
     const possibleImageAssets = [];
     const possibleAudioAssets = [];
@@ -1484,6 +1588,18 @@ class WfExtractor {
         possibleGeneralAmfAssets,
         await this.digestAndCheckFilePath(`${filePath}.movie.amf3.deflate`)
       );
+      // JSON data files (FileReader.readDataFile: <path><kind>.amf3.deflate):
+      // UI layouts (`addUi` → `.ui`, e.g. scene/gacha_result/gacha_result),
+      // gacha physics configs (`gacha/<movie_id>.gacha`), battle replay /
+      // ball logs. The generic amf3 → json output handles them.
+      for (const dataKind of DATA_FILE_KINDS) {
+        pushExist(
+          possibleGeneralAmfAssets,
+          await this.digestAndCheckFilePath(
+            `${filePath}${dataKind}.amf3.deflate`
+          )
+        );
+      }
       pushExist(
         possibleGeneralAmfAssets,
         await this.digestAndCheckFilePath(
@@ -1533,12 +1649,16 @@ class WfExtractor {
       const movieEntry = await this.digestAndCheckFilePath(
         imagePath.replace(fileName, `${fileNameRoot}.movie.amf3.deflate`)
       );
+      const uiEntry = await this.digestAndCheckFilePath(
+        imagePath.replace(fileName, `${fileNameRoot}.ui.amf3.deflate`)
+      );
 
       pushExist(possibleImageAmfAssets, partsEntry);
       pushExist(possibleImageAmfAssets, frameEntry);
       pushExist(possibleImageAmfAssets, pixelartFrameEntry);
       pushExist(possibleImageAmfAssets, atfEntry);
       pushExist(possibleImageAmfAssets, movieEntry);
+      pushExist(possibleImageAmfAssets, uiEntry);
 
       if (atlasEntry) {
         sprites[parentPath] = 'sprite';
@@ -3079,6 +3199,10 @@ class WfExtractor {
           '.frame.amf3',
           '.parts.amf3',
           '.movie.amf3',
+          '.ui.amf3',
+          '.gacha.amf3',
+          '.battle.amf3',
+          '.ball.amf3',
           '.atf',
           '.action.dsl',
           '.action.dsl.amf3',
